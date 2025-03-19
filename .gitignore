@@ -1,5 +1,4 @@
 .env
 
-.TESTING/
-.DB CREATOR/
+devtools/
 node_modules/

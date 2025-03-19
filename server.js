@@ -1,3 +1,4 @@
+const { MongoClient, ObjectId } = require("mongodb");
 const cookieParser = require("cookie-parser");
 const session = require("express-session");
 const express = require("express");
@@ -14,27 +15,31 @@ app.use(cookieParser());
 // ENVIRONMENT VARIABLE - SERVER DOMAIN
 require("dotenv").config();
 
-app.use(express.static(path.join(__dirname, "public")));
-app.use(cors({ origin: process.env.SERVER_ADDRESS, credentials: true }));
+const connectDB = require('./src/config/connectmongo');
+
+app.use(cors({ origin: `${process.env.SERVER_ADDRESS}:${process.env.PORT}`, credentials: true }));
 app.use(
   session({
     secret: process.env.SECRET_COOKIE_KEY,
     resave: false,
     saveUninitialized: true,
-    cookie: { maxAge: 5 * 60 * 1000 }, // 5 min session
+    cookie: { maxAge: 30 * 24 * 60 * 60 * 1000 },
   })
 );
 
+const restoreSessionMiddleware = require("./src/middlewares/restoreSession");
+app.use(restoreSessionMiddleware);
+
 // Middleware
 const { stringify } = require("querystring");
-const authentication = require("./routes/auth");
-const profileRoutes = require("./routes/user");
-const homepageRoutes = require("./routes/client");
-const cartRoutes = require("./routes/cart");
-const orderRoutes = require("./routes/order");
-const aboutRoutes = require("./routes/about");
-const querryRoutes = require("./routes/querry");
-const mailerRoutes = require("./routes/mailer/nodemailer");
+const authentication = require("./src/routes/auth");
+const profileRoutes = require("./src/routes/user");
+const homepageRoutes = require("./src/routes/client");
+const cartRoutes = require("./src/routes/cart");
+const orderRoutes = require("./src/routes/order");
+const aboutRoutes = require("./src/routes/about");
+const querryRoutes = require("./src/routes/querry");
+const mailerRoutes = require("./src/mailer/nodemailer");
 
 // Use routes with a base path
 app.use("/api", cartRoutes);
@@ -46,16 +51,41 @@ app.use("/api", aboutRoutes);
 app.use("/api", querryRoutes);
 app.use("/api/mail/send", mailerRoutes);
 
-// Pages Requests
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+// SESSION RESTORE MIDDLEWARE
+const verifyUser = require("./src/middlewares/VerifyUser");
+
+// =========== BLOCK DIRECT PRIVATE FOLDER ACCESS ============
+app.use("/private", (req, res) => {
+  return res.status(403).send("Forbidden: Direct access to private directory is not allowed");
 });
 
+// =========== PUBLIC ================
+// Pages Requests
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public/public/pages", "index.html"));
+});
+
+app.get("/about", (req, res) => {
+  res.sendFile(path.join(__dirname, "public/public/pages", "about.html"));
+});
+
+app.get("/cart", (req, res) => {
+  res.sendFile(path.join(__dirname, "public/public/pages", "cart.html"));
+});
+
+app.get("/product", (req, res) => {
+  res.sendFile(path.join(__dirname, "public/public/pages", "productpage.html"));
+});
+
+// Serve PUBLIC assets (css, js, imgs)
+app.use("/assets/public", express.static(path.join(__dirname, "public/public/assets")));
+
+// =========== PRIVATE ROUTES (HTML PAGES) ============
 app.get("/auth", (req, res) => {
   if (req.session.user) {
     res.redirect("/");
   } else {
-    res.sendFile(path.join(__dirname, "private_pages", "login.html"));
+    res.sendFile(path.join(__dirname, "public/private/pages", "login.html"));
   }
 });
 
@@ -63,44 +93,27 @@ app.get("/auth/new", (req, res) => {
   if (req.session.user) {
     res.redirect("/");
   } else {
-    res.sendFile(path.join(__dirname, "private_pages", "register.html"));
+    res.sendFile(path.join(__dirname, "public/private/pages", "register.html"));
   }
 });
 
-app.get("/auth/edit", (req, res) => {
-  res.sendFile(path.join(__dirname, "private_pages", "edit-profile.html"));
+app.get("/auth/edit", verifyUser, (req, res) => {
+  res.sendFile(path.join(__dirname, "public/private/pages", "edit-profile.html"));
 });
 
-// =========== Server Assets ================
-// CSS
-app.get("/auth/assets/css/:filename", (req, res) => {
-  const filename = req.params.filename;
-  const filePath = path.join(__dirname, "private_assets/css", filename);
-  res.sendFile(filePath);
+app.get("/me", verifyUser, (req, res) => {
+  res.sendFile(path.join(__dirname, "public/private/pages", "myprofile.html"));
 });
 
-// IMGS
-app.get("/auth/assets/imgs/:filename", (req, res) => {
-  const filename = req.params.filename;
-  const filePath = path.join(__dirname, "private_assets/imgs", filename);
-  res.sendFile(filePath);
-});
-// JS
-app.get("/auth/assets/js/:filename", (req, res) => {
-  const filename = req.params.filename;
-  const filePath = path.join(__dirname, "private_assets/js", filename);
-
-  res.sendFile(filePath);
-});
-
-// ==========================================
+// =========== PRIVATE ASSETS (css, js, imgs) ============
+app.use("/auth/assets", express.static(path.join(__dirname, "public/private/assets")));
 
 // Serve Database Imgs
 app.get("/api/images/:filename", (req, res) => {
   const filename = req.params.filename;
-  const imagePath = path.join(__dirname, "private_assets/database_imgs", filename);
+  const imagePath = path.join(__dirname, "public/private/assets/database_imgs", filename);
 
-  const allowedOrigin = process.env.SERVER_ADDRESS;
+  const allowedOrigin = `${process.env.SERVER_ADDRESS}:${process.env.PORT}`
 
   const referer = req.get("Referer") || "";
   const origin = req.get("Origin") || "";
@@ -123,13 +136,12 @@ app.get("/api/images/:filename", (req, res) => {
 app.use((req, res) => {
   const url = req.originalUrl;
   res.set("X-Requested-URL", url);
-  res.status(404).sendFile(__dirname + "/private_pages/404.html");
+  res.status(404).sendFile(path.join(__dirname, "public/private/pages/404.html"));
 });
-
 
 // Start Server
 app.listen(process.env.PORT || 3000, () =>
-  console.log(`Server running on ${process.env.SERVER_ADDRESS}`)
+  console.log(`Server running on ${process.env.SERVER_ADDRESS}:${process.env.PORT}`)
 );
 
 
